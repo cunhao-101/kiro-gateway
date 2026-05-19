@@ -45,6 +45,7 @@ from kiro.config import (
     AUTO_TRIM_PAYLOAD,
 )
 from kiro.payload_guards import check_payload_size, trim_payload_to_limit
+from kiro.prompt_filters import filter_system_prompt
 
 
 # ==================================================================================================
@@ -1439,7 +1440,7 @@ def build_kiro_payload(
     validate_tool_names(processed_tools)
     
     # Add tool documentation to system prompt if present
-    full_system_prompt = system_prompt
+    full_system_prompt = filter_system_prompt(system_prompt)
     if tool_documentation:
         full_system_prompt = full_system_prompt + tool_documentation if full_system_prompt else tool_documentation.strip()
     

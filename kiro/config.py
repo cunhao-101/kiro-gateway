@@ -333,6 +333,18 @@ TOOL_DESCRIPTION_MAX_LENGTH: int = int(os.getenv("TOOL_DESCRIPTION_MAX_LENGTH", 
 TRUNCATION_RECOVERY: bool = os.getenv("TRUNCATION_RECOVERY", "true").lower() in ("true", "1", "yes")
 
 # ==================================================================================================
+# Prompt Filter Settings
+# ==================================================================================================
+
+# Filter client-injected system prompt branding before it is sent to Kiro.
+# Default: off (preserves existing behavior).
+#
+# Modes:
+#   off      - no filtering
+#   identity - remove Claude Code identity/model/product metadata, keep project and tool context
+PROMPT_FILTER_MODE: str = os.getenv("PROMPT_FILTER_MODE", "off").strip().lower()
+
+# ==================================================================================================
 # Logging Settings
 # ==================================================================================================
 
@@ -578,4 +590,3 @@ def get_kiro_api_host(region: str) -> str:
 def get_kiro_q_host(region: str) -> str:
     """Return Q API host for the specified region."""
     return KIRO_Q_HOST_TEMPLATE.format(region=region)
-
