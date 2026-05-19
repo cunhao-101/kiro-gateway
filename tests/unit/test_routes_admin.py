@@ -73,6 +73,10 @@ def test_admin_status_returns_usage_summary(monkeypatch):
     assert data["total_requests"] == 5
     assert data["successful_requests"] == 3
     assert data["failed_requests"] == 2
+    assert data["success_rate"] == 60.0
+    assert data["accounts_cooling"] == 1
+    assert data["accounts_initialized"] == 1
+    assert data["models_mapped"] == 1
 
 
 def test_admin_accounts_are_sanitized(monkeypatch):
@@ -85,6 +89,25 @@ def test_admin_accounts_are_sanitized(monkeypatch):
     account = response.json()[0]
     assert account["label"] == "kiro-acc1.json"
     assert account["initialized"] is True
+    assert account["status"] == "cooling"
     assert account["models_count"] == 1
+    assert account["stats"]["success_rate"] == 60.0
     assert "access_token" not in account
     assert "refresh_token" not in account
+
+
+def test_admin_models_returns_sanitized_model_mapping(monkeypatch):
+    monkeypatch.setattr(routes_admin, "PROXY_API_KEY", "secret")
+    client = make_client()
+
+    response = client.get("/admin/api/models", headers={"Authorization": "Bearer secret"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data == [
+        {
+            "model": "claude-sonnet-4.5",
+            "accounts_count": 1,
+            "accounts": ["kiro-acc1.json"],
+        }
+    ]
