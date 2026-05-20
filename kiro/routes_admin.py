@@ -13,7 +13,13 @@ from fastapi.responses import HTMLResponse
 from fastapi.security import APIKeyHeader
 from loguru import logger
 
-from kiro.config import APP_VERSION, PROMPT_FILTER_MODE, PROXY_API_KEY
+from kiro.config import (
+    APP_VERSION,
+    KIRO_COST_INCLUDED_CREDIT_USD,
+    KIRO_COST_INCLUDED_CREDITS_PER_ACCOUNT,
+    KIRO_COST_OVERAGE_CREDIT_USD,
+    PROXY_API_KEY,
+)
 from kiro.usage_tracking import get_prompt_cache_tracker
 
 
@@ -55,7 +61,6 @@ async def admin_status(request: Request) -> Dict[str, Any]:
         "version": APP_VERSION,
         "generated_at": time.time(),
         "account_system": bool(getattr(request.app.state, "account_system", False)),
-        "prompt_filter_mode": PROMPT_FILTER_MODE,
         "accounts_total": len(accounts),
         "accounts_available": sum(1 for account in accounts if account["available"]),
         "accounts_cooling": sum(1 for account in accounts if account["status"] == "cooling"),
@@ -68,6 +73,7 @@ async def admin_status(request: Request) -> Dict[str, Any]:
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "credits_used": round(credits_used, 6),
+        "cost_estimate": _cost_estimate(credits_used, max(len(accounts), 1)),
         "simulated_cache_read_input_tokens": simulated_cache_read,
         "simulated_cache_creation_input_tokens": simulated_cache_creation,
         "simulated_cache_hit_rate": _percent(simulated_cache_read, simulated_cache_read + simulated_cache_creation),
@@ -81,15 +87,6 @@ async def admin_status(request: Request) -> Dict[str, Any]:
 @router.get("/api/accounts", dependencies=[Security(verify_admin_api_key)])
 async def admin_accounts(request: Request) -> List[Dict[str, Any]]:
     return _account_snapshots(request.app.state.account_manager)
-
-
-@router.get("/api/prompt-filter", dependencies=[Security(verify_admin_api_key)])
-async def admin_prompt_filter() -> Dict[str, Any]:
-    return {
-        "mode": PROMPT_FILTER_MODE,
-        "enabled": PROMPT_FILTER_MODE not in ("", "off", "false", "0", "no", "disabled"),
-        "available_modes": ["off", "identity"],
-    }
 
 
 @router.get("/api/models", dependencies=[Security(verify_admin_api_key)])
@@ -141,6 +138,7 @@ def _account_snapshots(manager: Any) -> List[Dict[str, Any]]:
                 "output_tokens": output_tokens,
                 "total_tokens": total_tokens,
                 "credits_used": round(credits_used, 6),
+                "cost_estimate": _cost_estimate(credits_used, 1),
                 "upstream_cache_read_input_tokens": upstream_cache_read,
                 "upstream_cache_creation_input_tokens": upstream_cache_creation,
                 "simulated_cache_read_input_tokens": simulated_cache_read,
@@ -183,6 +181,21 @@ def _cooldown_seconds_remaining(account: Any, now: float) -> int:
 
 def _percent(numerator: float, denominator: float) -> float:
     return round((numerator / denominator) * 100, 1) if denominator else 0.0
+
+
+def _cost_estimate(credits_used: float, account_count: int) -> Dict[str, Any]:
+    included_credits = max(account_count, 1) * KIRO_COST_INCLUDED_CREDITS_PER_ACCOUNT
+    overage_credits = max(float(credits_used) - included_credits, 0.0)
+
+    return {
+        "credits_used": round(float(credits_used), 6),
+        "included_credits": included_credits,
+        "included_credit_usd": KIRO_COST_INCLUDED_CREDIT_USD,
+        "overage_credit_usd": KIRO_COST_OVERAGE_CREDIT_USD,
+        "included_value_usd": round(float(credits_used) * KIRO_COST_INCLUDED_CREDIT_USD, 4),
+        "overage_credits": round(overage_credits, 6),
+        "overage_cost_usd": round(overage_credits * KIRO_COST_OVERAGE_CREDIT_USD, 4),
+    }
 
 
 _ADMIN_HTML = """<!doctype html>
@@ -290,7 +303,7 @@ _ADMIN_HTML = """<!doctype html>
     }
     .summary {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 12px;
       margin-bottom: 16px;
     }
@@ -326,7 +339,7 @@ _ADMIN_HTML = """<!doctype html>
     .seg button { border: 0; border-radius: 0; min-height: 34px; background: transparent; }
     .seg button.active { background: var(--accent); color: #fff; }
     .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; min-width: 1120px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1200px; }
     th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; font-size: 14px; white-space: nowrap; }
     th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; background: color-mix(in srgb, var(--surface) 92%, var(--surface-2)); }
     tr:last-child td { border-bottom: 0; }
@@ -441,6 +454,7 @@ _ADMIN_HTML = """<!doctype html>
               <th>Success</th>
               <th>Tokens</th>
               <th>Credits</th>
+              <th>Cost</th>
               <th>Prompt cache</th>
               <th>Failures</th>
               <th>Cooldown</th>
@@ -535,12 +549,12 @@ _ADMIN_HTML = """<!doctype html>
         tile('Requests', '--', 'successful / total'),
         tile('Tokens', '--', 'input + output'),
         tile('Credits', '--', 'reported by Kiro'),
+        tile('Cost est', '--', 'USD estimate'),
         tile('Sim cache', '--', 'trend indicator'),
         tile('Models', '--', 'mapped routes'),
-        tile('Prompt filter', '--', 'current mode'),
         tile('Tracker', '--', 'local entries')
       ].join('');
-      document.getElementById('accounts').innerHTML = `<tr><td colspan="11" class="empty">No data loaded</td></tr>`;
+      document.getElementById('accounts').innerHTML = `<tr><td colspan="12" class="empty">No data loaded</td></tr>`;
       document.getElementById('models').innerHTML = `<div class="empty">No data loaded</div>`;
       document.getElementById('version').textContent = '';
       document.getElementById('updated').textContent = '';
@@ -553,9 +567,9 @@ _ADMIN_HTML = """<!doctype html>
         tile('Requests', `${s.successful_requests}/${s.total_requests}`, `${s.failed_requests} failed`),
         tile('Tokens', formatNumber(s.total_tokens), `${formatNumber(s.input_tokens)} in / ${formatNumber(s.output_tokens)} out`),
         tile('Credits', formatCredits(s.credits_used), 'reported by Kiro'),
+        tile('Cost est', formatMoney(s.cost_estimate.included_value_usd), `overage ${formatMoney(s.cost_estimate.overage_cost_usd)}`),
         tile('Sim cache', `${s.simulated_cache_hit_rate}%`, `${formatNumber(s.simulated_cache_read_input_tokens)} read`),
         tile('Models', s.models_mapped, 'mapped routes'),
-        tile('Prompt filter', s.prompt_filter_mode, s.account_system ? 'account system on' : 'legacy mode'),
         tile('Tracker', s.cache_tracker.entries, `${s.cache_tracker.tracked_accounts} accounts`)
       ].join('');
     }
@@ -567,7 +581,7 @@ _ADMIN_HTML = """<!doctype html>
         .filter(a => !q || a.label.toLowerCase().includes(q) || a.id.toLowerCase().includes(q));
       const body = document.getElementById('accounts');
       if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="11" class="empty">No matching accounts</td></tr>`;
+        body.innerHTML = `<tr><td colspan="12" class="empty">No matching accounts</td></tr>`;
         return;
       }
       body.innerHTML = rows.map(a => {
@@ -581,6 +595,7 @@ _ADMIN_HTML = """<!doctype html>
           <td><div class="progress" aria-label="${rate}%"><div class="bar" style="width:${clamp(rate)}%"></div></div><div class="muted">${rate}%</div></td>
           <td>${formatNumber(a.stats.total_tokens)}<div class="muted">${formatNumber(a.stats.input_tokens)} / ${formatNumber(a.stats.output_tokens)}</div></td>
           <td>${formatCredits(a.stats.credits_used)}</td>
+          <td>${formatMoney(a.stats.cost_estimate.included_value_usd)}<div class="muted">over ${formatMoney(a.stats.cost_estimate.overage_cost_usd)}</div></td>
           <td>${formatNumber(a.stats.simulated_cache_read_input_tokens)}<div class="muted">${a.stats.simulated_cache_hit_rate}% simulated</div></td>
           <td>${a.failures}</td>
           <td>${formatDuration(a.cooldown_seconds_remaining)}</td>
@@ -652,6 +667,11 @@ _ADMIN_HTML = """<!doctype html>
       const num = Number(value) || 0;
       if (!num) return '0';
       return num < 1 ? num.toFixed(4) : num.toFixed(2);
+    }
+
+    function formatMoney(value) {
+      const num = Number(value) || 0;
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(num);
     }
 
     function formatClock(value) {

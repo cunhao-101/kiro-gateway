@@ -333,18 +333,6 @@ TOOL_DESCRIPTION_MAX_LENGTH: int = int(os.getenv("TOOL_DESCRIPTION_MAX_LENGTH", 
 TRUNCATION_RECOVERY: bool = os.getenv("TRUNCATION_RECOVERY", "true").lower() in ("true", "1", "yes")
 
 # ==================================================================================================
-# Prompt Filter Settings
-# ==================================================================================================
-
-# Filter client-injected system prompt branding before it is sent to Kiro.
-# Default: off (preserves existing behavior).
-#
-# Modes:
-#   off      - no filtering
-#   identity - remove Claude Code identity/model/product metadata, keep project and tool context
-PROMPT_FILTER_MODE: str = os.getenv("PROMPT_FILTER_MODE", "off").strip().lower()
-
-# ==================================================================================================
 # Prompt Cache Simulation Settings
 # ==================================================================================================
 
@@ -356,6 +344,16 @@ PROMPT_CACHE_DEFAULT_TTL_SECONDS: int = int(os.getenv("PROMPT_CACHE_DEFAULT_TTL_
 PROMPT_CACHE_ONE_HOUR_TTL_SECONDS: int = int(os.getenv("PROMPT_CACHE_ONE_HOUR_TTL_SECONDS", "3600"))
 PROMPT_CACHE_MIN_TOKENS: int = int(os.getenv("PROMPT_CACHE_MIN_TOKENS", "1024"))
 PROMPT_CACHE_OPUS_MIN_TOKENS: int = int(os.getenv("PROMPT_CACHE_OPUS_MIN_TOKENS", "4096"))
+
+# ==================================================================================================
+# Cost Estimation Settings
+# ==================================================================================================
+
+# Dashboard-only Kiro cost estimator. Defaults match Kiro commercial pricing:
+# Pro/Pro+ included credits work out to $0.02/credit; overage is $0.04/credit.
+KIRO_COST_INCLUDED_CREDIT_USD: float = float(os.getenv("KIRO_COST_INCLUDED_CREDIT_USD", "0.02"))
+KIRO_COST_OVERAGE_CREDIT_USD: float = float(os.getenv("KIRO_COST_OVERAGE_CREDIT_USD", "0.04"))
+KIRO_COST_INCLUDED_CREDITS_PER_ACCOUNT: int = int(os.getenv("KIRO_COST_INCLUDED_CREDITS_PER_ACCOUNT", "1000"))
 
 # ==================================================================================================
 # Logging Settings

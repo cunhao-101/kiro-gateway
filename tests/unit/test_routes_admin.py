@@ -87,6 +87,8 @@ def test_admin_status_returns_usage_summary(monkeypatch):
     assert data["models_mapped"] == 1
     assert data["total_tokens"] == 1500
     assert data["credits_used"] == 1.25
+    assert data["cost_estimate"]["included_value_usd"] == 0.025
+    assert data["cost_estimate"]["overage_cost_usd"] == 0.0
     assert data["simulated_cache_hit_rate"] == 66.7
 
 
@@ -105,6 +107,8 @@ def test_admin_accounts_are_sanitized(monkeypatch):
     assert account["stats"]["success_rate"] == 60.0
     assert account["stats"]["total_tokens"] == 1500
     assert account["stats"]["credits_used"] == 1.25
+    assert account["stats"]["cost_estimate"]["included_value_usd"] == 0.025
+    assert account["stats"]["cost_estimate"]["overage_cost_usd"] == 0.0
     assert account["stats"]["simulated_cache_hit_rate"] == 66.7
     assert "access_token" not in account
     assert "refresh_token" not in account
