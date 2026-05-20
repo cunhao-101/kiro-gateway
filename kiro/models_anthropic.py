@@ -46,6 +46,8 @@ class TextContentBlock(BaseModel):
     type: Literal["text"] = "text"
     text: str
 
+    model_config = {"extra": "allow"}
+
 
 class ThinkingContentBlock(BaseModel):
     """

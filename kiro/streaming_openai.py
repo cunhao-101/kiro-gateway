@@ -44,6 +44,7 @@ from kiro.config import (
     FAKE_REASONING_HANDLING,
 )
 from kiro.tokenizer import count_tokens, count_message_tokens, count_tools_tokens
+from kiro.usage_tracking import UsageRecord, extract_credits_used, notify_usage_callback
 
 # Import from streaming_core - reuse shared parsing logic
 from kiro.streaming_core import (
@@ -78,7 +79,8 @@ async def stream_kiro_to_openai_internal(
     first_token_timeout: float = FIRST_TOKEN_TIMEOUT,
     request_messages: Optional[list] = None,
     request_tools: Optional[list] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    usage_callback=None,
 ) -> AsyncGenerator[str, None]:
     """
     Internal generator for converting Kiro stream to OpenAI format.
@@ -119,6 +121,7 @@ async def stream_kiro_to_openai_internal(
     first_chunk = True
     
     metering_data = None
+    credits_used = 0.0
     context_usage_percentage = None
     full_content = ""
     full_thinking_content = ""  # Accumulated thinking content for non-streaming
@@ -264,6 +267,7 @@ async def stream_kiro_to_openai_internal(
             
             elif event.type == "usage" and event.usage:
                 metering_data = event.usage
+                credits_used += extract_credits_used(event.usage)
             
             elif event.type == "context_usage" and event.context_usage_percentage is not None:
                 context_usage_percentage = event.context_usage_percentage
@@ -414,6 +418,13 @@ async def stream_kiro_to_openai_internal(
         )
         
         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
+
+        await notify_usage_callback(usage_callback, UsageRecord(
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            credits_used=credits_used,
+        ))
+
         yield "data: [DONE]\n\n"
         
     except FirstTokenTimeoutError:
@@ -454,7 +465,8 @@ async def stream_kiro_to_openai(
     model_cache: "ModelInfoCache",
     auth_manager: "KiroAuthManager",
     request_messages: Optional[list] = None,
-    request_tools: Optional[list] = None
+    request_tools: Optional[list] = None,
+    usage_callback=None,
 ) -> AsyncGenerator[str, None]:
     """
     Generator for converting Kiro stream to OpenAI format.
@@ -477,7 +489,8 @@ async def stream_kiro_to_openai(
     async for chunk in stream_kiro_to_openai_internal(
         client, response, model, model_cache, auth_manager,
         request_messages=request_messages,
-        request_tools=request_tools
+        request_tools=request_tools,
+        usage_callback=usage_callback,
     ):
         yield chunk
 
@@ -492,7 +505,8 @@ async def stream_with_first_token_retry(
     max_retries: int = FIRST_TOKEN_MAX_RETRIES,
     first_token_timeout: float = FIRST_TOKEN_TIMEOUT,
     request_messages: Optional[list] = None,
-    request_tools: Optional[list] = None
+    request_tools: Optional[list] = None,
+    usage_callback=None,
 ) -> AsyncGenerator[str, None]:
     """
     Streaming with automatic retry on first token timeout.
@@ -557,7 +571,8 @@ async def stream_with_first_token_retry(
             auth_manager,
             first_token_timeout=first_token_timeout,
             request_messages=request_messages,
-            request_tools=request_tools
+            request_tools=request_tools,
+            usage_callback=usage_callback,
         ):
             yield chunk
     
@@ -580,7 +595,8 @@ async def collect_stream_response(
     model_cache: "ModelInfoCache",
     auth_manager: "KiroAuthManager",
     request_messages: Optional[list] = None,
-    request_tools: Optional[list] = None
+    request_tools: Optional[list] = None,
+    usage_callback=None,
 ) -> dict:
     """
     Collect full response from streaming stream.
@@ -614,7 +630,8 @@ async def collect_stream_response(
         model_cache,
         auth_manager,
         request_messages=request_messages,
-        request_tools=request_tools
+        request_tools=request_tools,
+        usage_callback=usage_callback,
     ):
         if not chunk_str.startswith("data:"):
             continue

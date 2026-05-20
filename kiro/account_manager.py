@@ -40,7 +40,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 from loguru import logger
@@ -123,16 +123,40 @@ def _format_duration(seconds: float) -> str:
         return f"{int(seconds / 86400)}d"
 
 
+def _coerce_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    return 0
+
+
+def _coerce_float(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+    return 0.0
+
+
 @dataclass
 class AccountStats:
     """
     Statistics for account usage.
     
-    Tracks request counts for monitoring and future web UI.
+    Tracks request counts and usage aggregates for monitoring.
     """
     total_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    credits_used: float = 0.0
+    upstream_cache_read_input_tokens: int = 0
+    upstream_cache_creation_input_tokens: int = 0
+    simulated_cache_read_input_tokens: int = 0
+    simulated_cache_creation_input_tokens: int = 0
 
 
 @dataclass
@@ -362,7 +386,15 @@ class AccountManager:
                     account.stats = AccountStats(
                         total_requests=stats_data.get("total_requests", 0),
                         successful_requests=stats_data.get("successful_requests", 0),
-                        failed_requests=stats_data.get("failed_requests", 0)
+                        failed_requests=stats_data.get("failed_requests", 0),
+                        input_tokens=stats_data.get("input_tokens", 0),
+                        output_tokens=stats_data.get("output_tokens", 0),
+                        total_tokens=stats_data.get("total_tokens", 0),
+                        credits_used=stats_data.get("credits_used", 0.0),
+                        upstream_cache_read_input_tokens=stats_data.get("upstream_cache_read_input_tokens", 0),
+                        upstream_cache_creation_input_tokens=stats_data.get("upstream_cache_creation_input_tokens", 0),
+                        simulated_cache_read_input_tokens=stats_data.get("simulated_cache_read_input_tokens", 0),
+                        simulated_cache_creation_input_tokens=stats_data.get("simulated_cache_creation_input_tokens", 0),
                     )
             
             logger.info(f"Loaded state: {len(self._model_to_accounts)} model mappings, {len(self._accounts)} accounts")
@@ -386,7 +418,15 @@ class AccountManager:
                     "stats": {
                         "total_requests": account.stats.total_requests,
                         "successful_requests": account.stats.successful_requests,
-                        "failed_requests": account.stats.failed_requests
+                        "failed_requests": account.stats.failed_requests,
+                        "input_tokens": account.stats.input_tokens,
+                        "output_tokens": account.stats.output_tokens,
+                        "total_tokens": account.stats.total_tokens,
+                        "credits_used": account.stats.credits_used,
+                        "upstream_cache_read_input_tokens": account.stats.upstream_cache_read_input_tokens,
+                        "upstream_cache_creation_input_tokens": account.stats.upstream_cache_creation_input_tokens,
+                        "simulated_cache_read_input_tokens": account.stats.simulated_cache_read_input_tokens,
+                        "simulated_cache_creation_input_tokens": account.stats.simulated_cache_creation_input_tokens,
                     }
                 }
                 for account_id, account in self._accounts.items()
@@ -805,6 +845,33 @@ class AccountManager:
                     self._dirty = True
             except ValueError:
                 pass
+
+    async def record_usage(self, account_id: str, usage: Dict[str, Any]) -> None:
+        """
+        Add token, credit, and cache aggregates for a completed response.
+
+        This intentionally does not update request counts; report_success and
+        report_failure own request accounting.
+        """
+        async with self._lock:
+            account = self._accounts.get(account_id)
+            if not account:
+                return
+
+            stats = account.stats
+            input_tokens = _coerce_int(usage.get("input_tokens"))
+            output_tokens = _coerce_int(usage.get("output_tokens"))
+            total_tokens = _coerce_int(usage.get("total_tokens")) or input_tokens + output_tokens
+
+            stats.input_tokens += input_tokens
+            stats.output_tokens += output_tokens
+            stats.total_tokens += total_tokens
+            stats.credits_used += _coerce_float(usage.get("credits_used"))
+            stats.upstream_cache_read_input_tokens += _coerce_int(usage.get("upstream_cache_read_input_tokens"))
+            stats.upstream_cache_creation_input_tokens += _coerce_int(usage.get("upstream_cache_creation_input_tokens"))
+            stats.simulated_cache_read_input_tokens += _coerce_int(usage.get("simulated_cache_read_input_tokens"))
+            stats.simulated_cache_creation_input_tokens += _coerce_int(usage.get("simulated_cache_creation_input_tokens"))
+            self._dirty = True
     
     async def report_failure(
         self,

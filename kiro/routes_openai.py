@@ -365,6 +365,9 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                 if response.status_code == 200:
                     # SUCCESS - report and return
                     await account_manager.report_success(account.id, request_data.model)
+
+                    async def record_usage(usage, account_id=account.id):
+                        await account_manager.record_usage(account_id, usage)
                     
                     # Prepare data for token counting
                     messages_for_tokenizer = [msg.model_dump() for msg in request_data.messages]
@@ -389,7 +392,8 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                                     auth_manager=auth_manager,
                                     initial_response=response,
                                     request_messages=messages_for_tokenizer,
-                                    request_tools=tools_for_tokenizer
+                                    request_tools=tools_for_tokenizer,
+                                    usage_callback=record_usage,
                                 ):
                                     yield chunk
                             except GeneratorExit:
@@ -429,7 +433,8 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                             model_cache,
                             auth_manager,
                             request_messages=messages_for_tokenizer,
-                            request_tools=tools_for_tokenizer
+                            request_tools=tools_for_tokenizer,
+                            usage_callback=record_usage,
                         )
                         
                         await http_client.close()
@@ -664,6 +669,9 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
         messages_for_tokenizer = [msg.model_dump() for msg in request_data.messages]
         tools_for_tokenizer = [tool.model_dump() for tool in request_data.tools] if request_data.tools else None
         
+        async def record_usage(usage, account_id=account.id):
+            await request.app.state.account_manager.record_usage(account_id, usage)
+
         if request_data.stream:
             # Streaming mode with first token retry
             async def stream_wrapper():
@@ -685,7 +693,8 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                         auth_manager=auth_manager,
                         initial_response=response,
                         request_messages=messages_for_tokenizer,
-                        request_tools=tools_for_tokenizer
+                        request_tools=tools_for_tokenizer,
+                        usage_callback=record_usage,
                     ):
                         yield chunk
                 except GeneratorExit:
@@ -731,7 +740,8 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
                 model_cache,
                 auth_manager,
                 request_messages=messages_for_tokenizer,
-                request_tools=tools_for_tokenizer
+                request_tools=tools_for_tokenizer,
+                usage_callback=record_usage,
             )
             
             await http_client.close()

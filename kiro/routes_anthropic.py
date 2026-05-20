@@ -436,6 +436,9 @@ async def messages(
                 if response.status_code == 200:
                     # SUCCESS - report and return
                     await account_manager.report_success(account.id, request_data.model)
+
+                    async def record_usage(usage, account_id=account.id):
+                        await account_manager.record_usage(account_id, usage)
                     
                     if request_data.stream:
                         # Streaming mode
@@ -457,6 +460,8 @@ async def messages(
                                     request_messages=messages_for_tokenizer,
                                     request_tools=tools_for_tokenizer,
                                     request_system=system_for_tokenizer,
+                                    account_id=account.id,
+                                    usage_callback=record_usage,
                                 ):
                                     yield chunk
                             except GeneratorExit:
@@ -505,6 +510,8 @@ async def messages(
                             request_messages=messages_for_tokenizer,
                             request_tools=tools_for_tokenizer,
                             request_system=system_for_tokenizer,
+                            account_id=account.id,
+                            usage_callback=record_usage,
                         )
                         
                         await http_client.close()
@@ -793,6 +800,9 @@ async def messages(
                 }
             )
         
+        async def record_usage(usage, account_id=account.id):
+            await request.app.state.account_manager.record_usage(account_id, usage)
+
         if request_data.stream:
             # Streaming mode with first token retry
             async def stream_wrapper():
@@ -815,6 +825,8 @@ async def messages(
                         request_messages=messages_for_tokenizer,
                         request_tools=tools_for_tokenizer,
                         request_system=system_for_tokenizer,
+                        account_id=account.id,
+                        usage_callback=record_usage,
                     ):
                         yield chunk
                 except GeneratorExit:
@@ -864,6 +876,8 @@ async def messages(
                 request_messages=messages_for_tokenizer,
                 request_tools=tools_for_tokenizer,
                 request_system=system_for_tokenizer,
+                account_id=account.id,
+                usage_callback=record_usage,
             )
             
             await http_client.close()

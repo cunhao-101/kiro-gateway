@@ -345,6 +345,19 @@ TRUNCATION_RECOVERY: bool = os.getenv("TRUNCATION_RECOVERY", "true").lower() in 
 PROMPT_FILTER_MODE: str = os.getenv("PROMPT_FILTER_MODE", "off").strip().lower()
 
 # ==================================================================================================
+# Prompt Cache Simulation Settings
+# ==================================================================================================
+
+# Track Anthropic-style prompt cache breakpoints locally and report transparent
+# simulated cache metrics. Kiro upstream does not reliably expose cache usage,
+# so these fields are trend indicators, not proof of upstream credit savings.
+PROMPT_CACHE_SIMULATION: bool = os.getenv("PROMPT_CACHE_SIMULATION", "true").lower() in ("true", "1", "yes")
+PROMPT_CACHE_DEFAULT_TTL_SECONDS: int = int(os.getenv("PROMPT_CACHE_DEFAULT_TTL_SECONDS", "300"))
+PROMPT_CACHE_ONE_HOUR_TTL_SECONDS: int = int(os.getenv("PROMPT_CACHE_ONE_HOUR_TTL_SECONDS", "3600"))
+PROMPT_CACHE_MIN_TOKENS: int = int(os.getenv("PROMPT_CACHE_MIN_TOKENS", "1024"))
+PROMPT_CACHE_OPUS_MIN_TOKENS: int = int(os.getenv("PROMPT_CACHE_OPUS_MIN_TOKENS", "4096"))
+
+# ==================================================================================================
 # Logging Settings
 # ==================================================================================================
 

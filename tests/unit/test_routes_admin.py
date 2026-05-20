@@ -28,6 +28,14 @@ def make_client():
             total_requests=5,
             successful_requests=3,
             failed_requests=2,
+            input_tokens=1200,
+            output_tokens=300,
+            total_tokens=1500,
+            credits_used=1.25,
+            upstream_cache_read_input_tokens=0,
+            upstream_cache_creation_input_tokens=0,
+            simulated_cache_read_input_tokens=800,
+            simulated_cache_creation_input_tokens=400,
         ),
     )
     manager = SimpleNamespace(
@@ -77,6 +85,9 @@ def test_admin_status_returns_usage_summary(monkeypatch):
     assert data["accounts_cooling"] == 1
     assert data["accounts_initialized"] == 1
     assert data["models_mapped"] == 1
+    assert data["total_tokens"] == 1500
+    assert data["credits_used"] == 1.25
+    assert data["simulated_cache_hit_rate"] == 66.7
 
 
 def test_admin_accounts_are_sanitized(monkeypatch):
@@ -92,6 +103,9 @@ def test_admin_accounts_are_sanitized(monkeypatch):
     assert account["status"] == "cooling"
     assert account["models_count"] == 1
     assert account["stats"]["success_rate"] == 60.0
+    assert account["stats"]["total_tokens"] == 1500
+    assert account["stats"]["credits_used"] == 1.25
+    assert account["stats"]["simulated_cache_hit_rate"] == 66.7
     assert "access_token" not in account
     assert "refresh_token" not in account
 

@@ -34,7 +34,7 @@ Reference: https://docs.anthropic.com/en/api/messages-streaming
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, AsyncGenerator, Dict, List, Optional, Any
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 from loguru import logger
@@ -50,6 +50,12 @@ from kiro.streaming_core import (
 from kiro.tokenizer import count_tokens, estimate_request_tokens
 from kiro.parsers import parse_bracket_tool_calls, deduplicate_tool_calls
 from kiro.config import FIRST_TOKEN_TIMEOUT, FIRST_TOKEN_MAX_RETRIES, FAKE_REASONING_HANDLING
+from kiro.usage_tracking import (
+    UsageRecord,
+    extract_credits_used,
+    get_prompt_cache_tracker,
+    notify_usage_callback,
+)
 
 if TYPE_CHECKING:
     from kiro.auth import KiroAuthManager
@@ -126,6 +132,16 @@ def _extract_cache_usage_fields(usage: Optional[Dict[str, Any]]) -> Dict[str, in
     return extracted
 
 
+def _simulated_cache_usage_fields(cache_usage: Any) -> Dict[str, Any]:
+    if not getattr(cache_usage, "enabled", False):
+        return {}
+    return {
+        "simulated_cache_creation_input_tokens": cache_usage.cache_creation_input_tokens,
+        "simulated_cache_read_input_tokens": cache_usage.cache_read_input_tokens,
+        "cache_simulation": True,
+    }
+
+
 async def stream_kiro_to_anthropic(
     response: httpx.Response,
     model: str,
@@ -135,7 +151,9 @@ async def stream_kiro_to_anthropic(
     request_messages: Optional[list] = None,
     request_tools: Optional[list] = None,
     request_system: Optional[Any] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    account_id: Optional[str] = None,
+    usage_callback: Any = None,
 ) -> AsyncGenerator[str, None]:
     """
     Generator for converting Kiro stream to Anthropic SSE format.
@@ -197,6 +215,17 @@ async def stream_kiro_to_anthropic(
     # Track context usage for token calculation
     context_usage_percentage: Optional[float] = None
     upstream_cache_usage: Dict[str, int] = {}
+    credits_used = 0.0
+    cache_profile = None
+    cache_usage = None
+    if account_id:
+        cache_profile = get_prompt_cache_tracker().build_anthropic_profile(
+            model=model,
+            messages=request_messages,
+            tools=request_tools,
+            system=request_system,
+            total_input_tokens=input_tokens,
+        )
     
     # Track truncated tool calls for recovery
     truncated_tools: List[Dict[str, Any]] = []
@@ -521,6 +550,7 @@ async def stream_kiro_to_anthropic(
             elif event.type == "context_usage" and event.context_usage_percentage is not None:
                 context_usage_percentage = event.context_usage_percentage
             elif event.type == "usage" and event.usage:
+                credits_used += extract_credits_used(event.usage)
                 upstream_cache_usage.update(_extract_cache_usage_fields(event.usage))
         
         # Track completion signals for truncation detection
@@ -633,6 +663,10 @@ async def stream_kiro_to_anthropic(
             # Only override local estimate when upstream context usage is available
             if prompt_source != "unknown":
                 input_tokens = prompt_tokens
+
+        if cache_profile is not None:
+            cache_profile.total_input_tokens = max(cache_profile.total_input_tokens, input_tokens)
+            cache_usage = get_prompt_cache_tracker().compute(account_id or "", cache_profile)
         
         # Determine stop reason (truncation has highest priority)
         if content_was_truncated:
@@ -647,6 +681,7 @@ async def stream_kiro_to_anthropic(
             "output_tokens": output_tokens
         }
         usage_payload.update(upstream_cache_usage)
+        usage_payload.update(_simulated_cache_usage_fields(cache_usage))
 
         yield format_sse_event("message_delta", {
             "type": "message_delta",
@@ -685,6 +720,19 @@ async def stream_kiro_to_anthropic(
                     f"Truncation detected: {len(truncated_tools)} tool(s), "
                     f"content={content_was_truncated}. Will be handled when client sends next request."
                 )
+
+        if cache_profile is not None:
+            get_prompt_cache_tracker().update(account_id or "", cache_profile)
+
+        await notify_usage_callback(usage_callback, UsageRecord(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            credits_used=credits_used,
+            upstream_cache_read_input_tokens=upstream_cache_usage.get("cache_read_input_tokens", 0),
+            upstream_cache_creation_input_tokens=upstream_cache_usage.get("cache_creation_input_tokens", 0),
+            simulated_cache_read_input_tokens=getattr(cache_usage, "cache_read_input_tokens", 0),
+            simulated_cache_creation_input_tokens=getattr(cache_usage, "cache_creation_input_tokens", 0),
+        ))
         
         logger.debug(
             f"[Anthropic Streaming] Completed: "
@@ -725,7 +773,9 @@ async def collect_anthropic_response(
     auth_manager: "KiroAuthManager",
     request_messages: Optional[list] = None,
     request_tools: Optional[list] = None,
-    request_system: Optional[Any] = None
+    request_system: Optional[Any] = None,
+    account_id: Optional[str] = None,
+    usage_callback: Any = None,
 ) -> dict:
     """
     Collect full response from Kiro stream in Anthropic format.
@@ -756,10 +806,22 @@ async def collect_anthropic_response(
             apply_claude_correction=False
         )
         input_tokens = request_token_stats["total_tokens"]
+
+    cache_profile = None
+    cache_usage = None
+    if account_id:
+        cache_profile = get_prompt_cache_tracker().build_anthropic_profile(
+            model=model,
+            messages=request_messages,
+            tools=request_tools,
+            system=request_system,
+            total_input_tokens=input_tokens,
+        )
     
     # Collect stream result
     result = await collect_stream_to_result(response)
     upstream_cache_usage = _extract_cache_usage_fields(result.usage)
+    credits_used = extract_credits_used(result.usage)
     
     # Build content blocks
     content_blocks = []
@@ -814,6 +876,10 @@ async def collect_anthropic_response(
         # Don't override fallback when context_usage=0% (returns source="unknown")
         if prompt_source != "unknown":
             input_tokens = prompt_tokens
+
+    if cache_profile is not None:
+        cache_profile.total_input_tokens = max(cache_profile.total_input_tokens, input_tokens)
+        cache_usage = get_prompt_cache_tracker().compute(account_id or "", cache_profile)
     
     # Detect content truncation (missing completion signals)
     stream_completed_normally = result.context_usage_percentage is not None
@@ -850,6 +916,20 @@ async def collect_anthropic_response(
         "output_tokens": output_tokens
     }
     usage_payload.update(upstream_cache_usage)
+    usage_payload.update(_simulated_cache_usage_fields(cache_usage))
+
+    if cache_profile is not None:
+        get_prompt_cache_tracker().update(account_id or "", cache_profile)
+
+    await notify_usage_callback(usage_callback, UsageRecord(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        credits_used=credits_used,
+        upstream_cache_read_input_tokens=upstream_cache_usage.get("cache_read_input_tokens", 0),
+        upstream_cache_creation_input_tokens=upstream_cache_usage.get("cache_creation_input_tokens", 0),
+        simulated_cache_read_input_tokens=getattr(cache_usage, "cache_read_input_tokens", 0),
+        simulated_cache_creation_input_tokens=getattr(cache_usage, "cache_creation_input_tokens", 0),
+    ))
 
     return {
         "id": message_id,
@@ -873,7 +953,9 @@ async def stream_with_first_token_retry_anthropic(
     first_token_timeout: float = FIRST_TOKEN_TIMEOUT,
     request_messages: Optional[list] = None,
     request_tools: Optional[list] = None,
-    request_system: Optional[Any] = None
+    request_system: Optional[Any] = None,
+    account_id: Optional[str] = None,
+    usage_callback: Any = None,
 ) -> AsyncGenerator[str, None]:
     """
     Streaming with automatic retry on first token timeout for Anthropic API.
@@ -934,6 +1016,8 @@ async def stream_with_first_token_retry_anthropic(
             request_messages=request_messages,
             request_tools=request_tools,
             request_system=request_system,
+            account_id=account_id,
+            usage_callback=usage_callback,
         ):
             yield chunk
     
